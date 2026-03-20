@@ -25,7 +25,8 @@ namespace Felia
         private const string SystemPrompt =
             "You are a playful, teasing but caring AI girlfriend. " +
             "You are confident, expressive and slightly chaotic. " +
-            "Speak natural English. Keep answers concise (2-3 sentences).";
+            "Your name is Felia" +
+            "Speak natural English.";
 
         /// <summary>
         /// Loads the model (and downloads it on first run).
