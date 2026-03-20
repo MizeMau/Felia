@@ -2,23 +2,30 @@
 {
     internal class Program
     {
+        private static LlmService llm;
+        private static Whisper whisper;
+        public static string Appdata = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Felia");
         static async Task Main(string[] args)
         {
             Console.OutputEncoding = System.Text.Encoding.UTF8;
 
-            await InitWhisper();
-        }
+            llm = await LlmService.CreateAsync();
 
-        public static async Task InitWhisper()
-        {
-            var whisper = new Whisper();
+            Console.WriteLine("LLM ready.\n");
+
+            whisper = new Whisper();
             whisper.SpeakEvent += SpeakInvoked;
             await whisper.Init();
+
+            await Task.Delay(-1);
         }
 
-        private static void SpeakInvoked(object? sender, string speak)
+        private static async void SpeakInvoked(object? sender, string speak)
         {
-            Console.WriteLine($"You said: {speak}");
+            whisper.Pause();
+            var reply = await llm.ChatAsync(speak);
+            Console.WriteLine($"Felia answered: {reply}");
+            whisper.Resume();
         }
     }
 }

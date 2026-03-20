@@ -9,14 +9,30 @@ namespace Felia
 {
     public class Whisper
     {
-        const string ModelPath = "ggml-base.en.bin";
+        readonly string? ModelPath = "ggml-base.en.bin";
         const int SampleRate = 16000;
         const double SilenceRms = 0.015;   // tune up/down if too sensitive
         const int SilenceMs = 1200;    // ms of silence before transcribing
 
         public EventHandler<string> SpeakEvent;
+        private WaveInEvent? _mic;
+        public void Pause() => _mic?.StopRecording();
+        public void Resume()
+        {
+            Console.WriteLine("🎤 Listening…");
+            _mic?.StartRecording();
+        }
 
-        public async Task Init()
+        public Whisper(string? modelDirectory = null)
+        {
+            string modelDir = modelDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Felia", "models", "whisper"); ;
+
+            Directory.CreateDirectory(modelDir);
+
+            ModelPath = Path.Combine(modelDir, "ggml-base.en.bin");
+        }
+
+        public async Task Init(string? modelDirectory = null)
         {
             // ── 1. Download model on first run ───────────────────────────────
             if (!File.Exists(ModelPath))
@@ -47,13 +63,13 @@ namespace Felia
 
             // ── 4. Wire up microphone ────────────────────────────────────────
             var waveFormat = new WaveFormat(SampleRate, 16, 1);
-            using var mic = new WaveInEvent
+            _mic = new WaveInEvent
             {
                 WaveFormat = waveFormat,
                 BufferMilliseconds = 30
             };
 
-            mic.DataAvailable += (_, e) =>
+            _mic.DataAvailable += (_, e) =>
             {
                 // Convert 16-bit PCM → float samples
                 int count = e.BytesRecorded / 2;
@@ -73,7 +89,7 @@ namespace Felia
                         if (!isSpeaking)
                         {
                             isSpeaking = true;
-                            Console.Write("\r🎙  Speaking…        ");
+                            Console.WriteLine("🎙  Speaking…        ");
                         }
                         silenceAt = null;
                         audioBuffer.AddRange(samples);
@@ -98,7 +114,7 @@ namespace Felia
                             // Fire transcription off the audio thread
                             Task.Run(async () =>
                             {
-                                Console.Write("\r⏳ Transcribing…    ");
+                                Console.WriteLine("⏳ Transcribing…    ");
 
                                 var sb = new System.Text.StringBuilder();
                                 await foreach (var seg in processor.ProcessAsync(clip))
@@ -112,7 +128,6 @@ namespace Felia
                                 }
 
                                 lock (@lock) isTranscribing = false;
-                                Console.Write("\r🎤 Listening…        ");
                             });
                         }
                     }
@@ -120,10 +135,9 @@ namespace Felia
             };
 
             // ── 5. Start ─────────────────────────────────────────────────────
-            Console.WriteLine("\r🎤 Listening…  (press Enter to quit)");
-            mic.StartRecording();
-            Console.ReadLine();
-            mic.StopRecording();
+            Console.WriteLine("\r🎤 Listening…");
+            _mic.StartRecording();
+            await Task.Delay(-1);
         }
     }
 }
