@@ -9,135 +9,64 @@ namespace Felia
 {
     public class Whisper
     {
-        readonly string? ModelPath = "ggml-base.en.bin";
-        const int SampleRate = 16000;
-        const double SilenceRms = 0.015;   // tune up/down if too sensitive
-        const int SilenceMs = 1200;    // ms of silence before transcribing
+        readonly string ModelPath = "ggml-base.en.bin";
 
-        public EventHandler<string> SpeakEvent;
-        private WaveInEvent? _mic;
-        public void Pause() => _mic?.StopRecording();
-        public void Resume()
-        {
-            Console.WriteLine("🎤 Listening…");
-            _mic?.StartRecording();
-        }
+        private WhisperFactory? _Factory;
+        private WhisperProcessor? _Processor;
 
         public Whisper(string? modelDirectory = null)
         {
-            string modelDir = modelDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Felia", "models", "whisper"); ;
+            if (modelDirectory == null)
+            {
+                string appdataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                modelDirectory = Path.Combine(appdataPath, "Felia", "models", "whisper");
+            }
+            Directory.CreateDirectory(modelDirectory);
 
-            Directory.CreateDirectory(modelDir);
-
-            ModelPath = Path.Combine(modelDir, "ggml-base.en.bin");
+            ModelPath = Path.Combine(modelDirectory, "ggml-base.en.bin");
         }
 
-        public async Task Init(string? modelDirectory = null)
+        public async Task Init()
         {
-            // ── 1. Download model on first run ───────────────────────────────
             if (!File.Exists(ModelPath))
             {
-                Console.WriteLine("Downloading Whisper base.en model…");
+                Program.WriteLine("Downloading Whisper base.en model…");
                 await using var src = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(GgmlType.Base);
                 await using var dest = File.OpenWrite(ModelPath);
                 await src.CopyToAsync(dest);
-                Console.WriteLine("Model saved.\n");
+                Program.WriteLine("Model saved.\n");
             }
 
-            // ── 2. Build Whisper processor ───────────────────────────────────
-            using var factory = WhisperFactory.FromPath(ModelPath, new WhisperFactoryOptions
+            _Factory = WhisperFactory.FromPath(ModelPath, new WhisperFactoryOptions
             {
                 UseGpu = true,
-                GpuDevice = 0   // 0 = first GPU
+                GpuDevice = 0
             });
-            using var processor = factory.CreateBuilder()
-                                         .WithLanguage("en")
-                                         .Build();
+            _Processor = _Factory.CreateBuilder()
+                                .WithLanguage("en")
+                                .Build();
+        }
+        public void Dispose()
+        {
+            _Processor?.Dispose();
+            _Factory?.Dispose();
+        }
 
-            // ── 3. Shared state ──────────────────────────────────────────────
-            var audioBuffer = new List<float>();
-            var @lock = new object();
-            bool isSpeaking = false;
-            bool isTranscribing = false;
-            DateTime? silenceAt = null;
-
-            // ── 4. Wire up microphone ────────────────────────────────────────
-            var waveFormat = new WaveFormat(SampleRate, 16, 1);
-            _mic = new WaveInEvent
+        public async Task<string> Transcribe(List<byte> audio)
+        {
+            int count = audio.Count / 2;
+            var samples = new float[count];
+            for (int i = 0; i < count; i++)
             {
-                WaveFormat = waveFormat,
-                BufferMilliseconds = 30
-            };
+                short s = (short)(audio[i * 2] | (audio[i * 2 + 1] << 8)); // little-endian int16
+                samples[i] = s / 32768f;
+            }
 
-            _mic.DataAvailable += (_, e) =>
-            {
-                // Convert 16-bit PCM → float samples
-                int count = e.BytesRecorded / 2;
-                var samples = new float[count];
-                for (int i = 0; i < count; i++)
-                    samples[i] = BitConverter.ToInt16(e.Buffer, i * 2) / 32768f;
+            var sb = new StringBuilder();
+            await foreach (var seg in _Processor!.ProcessAsync(samples))
+                sb.Append(seg.Text);
 
-                // Compute RMS (volume)
-                double sumSq = 0;
-                foreach (var s in samples) sumSq += s * s;
-                double rms = Math.Sqrt(sumSq / count);
-
-                lock (@lock)
-                {
-                    if (rms > SilenceRms)                     // ── voice detected
-                    {
-                        if (!isSpeaking)
-                        {
-                            isSpeaking = true;
-                            Console.WriteLine("🎙  Speaking…        ");
-                        }
-                        silenceAt = null;
-                        audioBuffer.AddRange(samples);
-                    }
-                    else if (isSpeaking)                      // ── trailing silence
-                    {
-                        audioBuffer.AddRange(samples);        // keep tail for natural endings
-                        silenceAt ??= DateTime.UtcNow;
-
-                        bool silenceLongEnough =
-                            (DateTime.UtcNow - silenceAt.Value).TotalMilliseconds >= SilenceMs;
-
-                        if (silenceLongEnough && !isTranscribing)
-                        {
-                            isSpeaking = false;
-                            isTranscribing = true;
-                            silenceAt = null;
-
-                            float[] clip = audioBuffer.ToArray();
-                            audioBuffer.Clear();
-
-                            // Fire transcription off the audio thread
-                            Task.Run(async () =>
-                            {
-                                Console.WriteLine("⏳ Transcribing…    ");
-
-                                var sb = new System.Text.StringBuilder();
-                                await foreach (var seg in processor.ProcessAsync(clip))
-                                    sb.Append(seg.Text);
-
-                                string text = sb.ToString().Trim();
-                                if (text.Length > 0)
-                                {
-                                    Console.WriteLine($"📝 {text}");
-                                    SpeakEvent?.Invoke(this, text);
-                                }
-
-                                lock (@lock) isTranscribing = false;
-                            });
-                        }
-                    }
-                }
-            };
-
-            // ── 5. Start ─────────────────────────────────────────────────────
-            Console.WriteLine("\r🎤 Listening…");
-            _mic.StartRecording();
-            await Task.Delay(-1);
+            return sb.ToString().Trim();
         }
     }
 }

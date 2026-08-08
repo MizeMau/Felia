@@ -1,5 +1,8 @@
 #include <WiFi.h>
+#include <lwip/sockets.h>
 #include <driver/i2s.h>
+
+#include "config.h"
 
 #define I2S_WS   5
 #define I2S_SD   6
@@ -8,13 +11,8 @@
 #define SAMPLE_RATE 16000
 #define BUF_LEN 512
 
-#define PEAK_THRESHOLD    11000
+#define PEAK_THRESHOLD    20000
 #define SILENCE_TIMEOUT_MS 3000
-
-const char* ssid     = "";
-const char* password = "";
-const char* host      = ""; // your PC's IP
-const uint16_t port   = 5000;
 
 WiFiClient client;
 int32_t raw_samples[BUF_LEN];
@@ -24,12 +22,33 @@ bool recording = false;
 unsigned long lastAboveThreshold = 0;
 
 // Packet types
-#define PKT_AUDIO 0
-#define PKT_START 1
-#define PKT_END   2
+#define PKT_AUDIO 110
+#define PKT_START 100
+#define PKT_END   120
+
+void enableKeepAlive(WiFiClient &c) {
+  int sock = c.fd();
+  if (sock < 0) {
+    Serial.println("Could not get socket fd for keepalive");
+    return;
+  }
+
+  int enable = 1;
+  setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &enable, sizeof(enable));
+
+  int idle = 5;
+  int interval = 2; 
+  int count = 3; 
+
+  setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+  setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+  setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+
+  Serial.println("TCP keepalive enabled");
+}
 
 void connectWiFi() {
-  WiFi.begin(ssid, password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -41,11 +60,12 @@ void connectWiFi() {
 void connectServer() {
   while (!client.connected()) {
     Serial.println("Connecting to server...");
-    if (client.connect(host, port)) {
+    if (client.connect(WIFI_HOST, WIFI_PORT)) {
+      enableKeepAlive(client);
       Serial.println("Connected to server");
     } else {
       Serial.println("Connection failed, retrying...");
-      delay(1000);
+      delay(5000);
     }
   }
 }
