@@ -15,6 +15,7 @@
 		<PackageReference Include="LLamaSharp" Version="0.26.0" />
 		<PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.26.0" />
 		<PackageReference Include="NAudio" Version="2.3.0" />
+		<PackageReference Include="System.IO.Ports" Version="10.0.11" />
 		<PackageReference Include="Whisper.net" Version="1.9.0" />
 		<PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
 		<PackageReference Include="Whisper.net.Runtime.Cuda" Version="1.9.0" />

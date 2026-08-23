@@ -362,3 +362,10 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /Ardoino/test/config.h
+/Ardoino/mic/config.h
+/Ardoino/ESP32-S3-Nano-Schematic.pdf
+/Components/1_3_Zoll_Display_Datenblatt_AZ-Delivery_Vertriebs_GmbH_rev.pdf
+/Components/AF3006_adafruit-max98357-i2s-class-d-mono-amppdf_66e90d2d.pdf
+/Components/DS3231_RTC_Real_Time_Clock_DE_2a4d775e-b341-4982-a91d-0b543af02304.pdf
+/Components/INMP441-1112508.pdf
+/Components/INMP441-module-schematic-diagram.jpg
