@@ -37,10 +37,13 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stm32f4xx_ll_usart.h"
+#include "stm32f4xx_ll_utils.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdbool.h>
 #include <sys/_intsup.h>
 /* USER CODE END Includes */
 
@@ -65,30 +68,10 @@ I2S_HandleTypeDef hi2s2;
 I2S_HandleTypeDef hi2s3;
 
 /* USER CODE BEGIN PV */
-#define MIC_I2S      hi2s2
-#define SPK_I2S      hi2s3
-
-/* ---- Audio streaming test config ---- */
-#define HANDSHAKE_BYTE   0xAA
-#define READY_BYTE       0x55
-#define DONE_BYTE        0x44   // 'D'
-
-#define AUDIO_CHUNK_FRAMES   256                       // stereo frames per chunk
-static uint16_t audioBuf[AUDIO_CHUNK_FRAMES * 2];       // interleaved L,R uint16_t samples
-
-/* ---- Interrupt-driven ring buffer for USART2 (audio) RX ----
- * HAL_I2S_Transmit() is a blocking polling call (~16ms per chunk). During
- * that time nothing services the UART RX register in software, and STM32
- * USART hardware only buffers 1 byte - so a plain polling receive loses
- * hundreds of bytes per chunk and desyncs the whole stream (heard as
- * clicking/"bonking" garbled audio). An RXNE interrupt fires and drains
- * the register immediately regardless of what the main loop is doing, so
- * we buffer received bytes here and let AudioStream_Run() pull from it.
- */
-#define AUDIO_RXBUF_SIZE   16384u   /* must be a power of two */
-static volatile uint8_t  audioRxBuf[AUDIO_RXBUF_SIZE];
-static volatile uint16_t audioRxHead = 0; /* ISR writes here */
-static volatile uint16_t audioRxTail = 0; /* main loop reads here */
+#define Ring_Buffer_Size   16384u
+static volatile uint8_t  ringBuffer[Ring_Buffer_Size];
+static volatile uint16_t ringBufferPointer_RX = 0;
+static volatile uint16_t ringBufferPointer_TX = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -101,144 +84,43 @@ static void MX_I2C1_Init(void);
 static void MX_I2S3_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
-static void AudioStream_Run(void);
-void Audio_UART_ISR_Handler(void); /* called from USART2_IRQHandler in stm32f4xx_it.c */
+
+void UART_ISR_Handler(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* ---- Debug UART: USART1 (PA9/PA10) - human readable text only ---- */
-static void Debug_SendString(const char *str)
+void UART_ISR_Handler(void)
 {
-    while (*str)
-    {
-        while (!LL_USART_IsActiveFlag_TXE(USART1))
-        {
-        }
+  if (LL_USART_IsActiveFlag_RXNE(USART1))
+  {
+    uint8_t data = LL_USART_ReceiveData8(USART1);
+    ringBuffer[ringBufferPointer_RX] = data;
+    ringBufferPointer_RX++;
+    ringBufferPointer_RX &= 0x3FFF;
+  }
 
-        LL_USART_TransmitData8(USART1, (uint8_t)*str++);
-    }
-
-    while (!LL_USART_IsActiveFlag_TC(USART1))
-    {
-    }
+  if (LL_USART_IsActiveFlag_ORE(USART1))
+  {
+    LL_USART_ClearFlag_ORE(USART1);
+  }
 }
 
-/*
- * USART2 RX interrupt handler body. Add this call inside the real
- * USART2_IRQHandler() in stm32f4xx_it.c (see notes at bottom of file).
- */
-void Audio_UART_ISR_Handler(void)
+void USART_SEND_CHAR (char *data)
 {
-    if (LL_USART_IsActiveFlag_RXNE(USART2))
-    {
-        uint8_t b = LL_USART_ReceiveData8(USART2); /* also clears RXNE */
-        uint16_t next = (uint16_t)((audioRxHead + 1) & (AUDIO_RXBUF_SIZE - 1));
-        if (next != audioRxTail) /* drop byte only if buffer truly full */
-        {
-            audioRxBuf[audioRxHead] = b;
-            audioRxHead = next;
-        }
-    }
+  while (*data)
+  {
+      while (!LL_USART_IsActiveFlag_TXE(USART2));   // Wait until TX buffer is empty
+      LL_USART_TransmitData8(USART2, *data++);      // Transmit next byte
+  }
 
-    if (LL_USART_IsActiveFlag_ORE(USART2))
-    {
-        /* Clear overrun error flag so RX doesn't get stuck. Should not
-         * happen anymore with the ISR draining bytes promptly, but clear
-         * it defensively. */
-        LL_USART_ClearFlag_ORE(USART2);
-    }
+  while (!LL_USART_IsActiveFlag_TC(USART2));        // Wait for final transmission to complete
 }
-
-/* ---- Audio UART: USART2 (PA2/PA3, ST-Link VCP) - binary protocol only ----
- * Reads pull from the interrupt-filled ring buffer above, never poll the
- * USART peripheral directly.
- */
-static uint8_t Audio_RecvByte(void)
+void USART_SEND_BYTE (uint8_t data)
 {
-    while (audioRxHead == audioRxTail)
-    {
-        /* wait for the ISR to deliver a byte */
-    }
-    uint8_t b = audioRxBuf[audioRxTail];
-    audioRxTail = (uint16_t)((audioRxTail + 1) & (AUDIO_RXBUF_SIZE - 1));
-    return b;
-}
-
-static void Audio_SendByte(uint8_t b)
-{
-    while (!LL_USART_IsActiveFlag_TXE(USART2))
-    {
-    }
-    LL_USART_TransmitData8(USART2, b);
-}
-
-static void Audio_RecvBytes(uint8_t *buf, uint32_t len)
-{
-    for (uint32_t i = 0; i < len; i++)
-    {
-        buf[i] = Audio_RecvByte();
-    }
-}
-
-/*
- * Main audio streaming test routine.
- * Waits for a handshake from the PC, then receives a PCM stream and
- * forwards it directly to the I2S amp in fixed-size chunks.
- */
-static void AudioStream_Run(void)
-{
-    /* Wait for handshake byte from PC (blocking - this is fine, it's all
-     * this firmware does) */
-    if (Audio_RecvByte() != HANDSHAKE_BYTE)
-    {
-        return; // not our protocol, ignore
-    }
-
-    Debug_SendString("Handshake OK, sending READY\r\n");
-    Audio_SendByte(READY_BYTE);
-
-    LL_GPIO_ResetOutputPin(LD2_GPIO_Port, LD2_Pin); // LED on while streaming
-
-    /* Read 4-byte little-endian total frame count */
-    uint8_t hdr[4];
-    Audio_RecvBytes(hdr, 4);
-    uint32_t totalFrames = (uint32_t)hdr[0]
-                          | ((uint32_t)hdr[1] << 8)
-                          | ((uint32_t)hdr[2] << 16)
-                          | ((uint32_t)hdr[3] << 24);
-
-    char msg[48];
-    sprintf(msg, "Streaming %lu frames\r\n", (unsigned long)totalFrames);
-    Debug_SendString(msg);
-
-    uint32_t framesRemaining = totalFrames;
-
-    while (framesRemaining > 0)
-    {
-        uint32_t framesThisChunk = (framesRemaining >= AUDIO_CHUNK_FRAMES)
-                                        ? AUDIO_CHUNK_FRAMES
-                                        : framesRemaining;
-
-        /* Receive framesThisChunk stereo frames = framesThisChunk*4 bytes */
-        Audio_RecvBytes((uint8_t *)audioBuf, framesThisChunk * 4);
-
-        /* Size param for HAL_I2S_Transmit = number of 16-bit words to send
-         * (L+R per frame), matches I2S_DATAFORMAT_16B config on hi2s3 */
-        if (HAL_I2S_Transmit(&SPK_I2S, audioBuf, (uint16_t)(framesThisChunk * 2), 2000) != HAL_OK)
-        {
-            Debug_SendString("I2S TX ERROR\r\n");
-            break;
-        }
-
-        framesRemaining -= framesThisChunk;
-    }
-
-    LL_GPIO_SetOutputPin(LD2_GPIO_Port, LD2_Pin); // LED off
-
-    Debug_SendString("Stream complete\r\n");
-    Audio_SendByte(DONE_BYTE);
+  LL_USART_TransmitData8(USART2,data);
 }
 
 /* USER CODE END 0 */
@@ -283,22 +165,26 @@ int main(void)
   /* USER CODE BEGIN 2 */
   /* Switch USART2 to interrupt-driven RX for the audio link (see the ring
    * buffer + Audio_UART_ISR_Handler() above for why this matters). */
-  LL_USART_EnableIT_RXNE(USART2);
-  NVIC_SetPriority(USART2_IRQn, 0); /* highest priority - must preempt the
+  LL_USART_EnableIT_RXNE(USART1);
+  NVIC_SetPriority(USART1_IRQn, 0); /* highest priority - must preempt the
                                       * blocking I2S transmit busy-loop */
-  NVIC_EnableIRQ(USART2_IRQn);
+  NVIC_EnableIRQ(USART1_IRQn);
 
-  Debug_SendString("Debug UART OK - Amp streaming test ready\r\n");
+  // Debug_SendString("Debug UART OK - Amp streaming test ready\r\n");
   /* USER CODE END 2 */
-
+  ringBufferPointer_TX = 0;
+  USART_SEND_CHAR("Hello from STM32 LL UART!\r\n");
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
+  while (true)
   {
     /* USER CODE END WHILE */
-
+    if (ringBufferPointer_TX != ringBufferPointer_RX) {
+      USART_SEND_BYTE(ringBuffer[ringBufferPointer_TX]);
+      ringBufferPointer_TX++;
+      ringBufferPointer_TX &= 0x3FFF;
+    }
     /* USER CODE BEGIN 3 */
-    AudioStream_Run();
   }
   /* USER CODE END 3 */
 }
@@ -496,9 +382,6 @@ static void MX_I2S3_Init(void)
   * @brief USART1 Initialization Function
   * @param None
   * @retval None
-  *
-  * Debug UART only in this test build (kept at 115200, reserved for the
-  * ESP32 link later). All human-readable status messages go here.
   */
 static void MX_USART1_UART_Init(void)
 {
@@ -527,6 +410,10 @@ static void MX_USART1_UART_Init(void)
   GPIO_InitStruct.Alternate = LL_GPIO_AF_7;
   LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /* USART1 interrupt Init */
+  NVIC_SetPriority(USART1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(USART1_IRQn);
+
   /* USER CODE BEGIN USART1_Init 1 */
 
   /* USER CODE END USART1_Init 1 */
@@ -550,13 +437,6 @@ static void MX_USART1_UART_Init(void)
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
-  *
-  * NOTE: Baud rate raised to 460800 for this test - USART2 (PA2/PA3, the
-  * ST-Link virtual COM port) is now the dedicated high-throughput binary
-  * audio link to the PC. 16kHz stereo 16-bit PCM needs ~64KB/s;
-  * 115200 baud (~11.5KB/s) is far too slow. 460800 is used instead of
-  * 921600 since ST-Link VCP bridges are not always reliable at very high
-  * rates - bump it up once you've confirmed the basic test works.
   */
 static void MX_USART2_UART_Init(void)
 {
@@ -701,26 +581,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-/* =============================================================================
- * IMPORTANT - ONE MANUAL STEP REQUIRED
- * =============================================================================
- * CubeMX generates the actual USART2_IRQHandler() in stm32f4xx_it.c, not
- * here in main.c. Open stm32f4xx_it.c and find (or add) the handler, then
- * call Audio_UART_ISR_Handler() from inside it:
- *
- *   void USART2_IRQHandler(void)
- *   {
- *     Audio_UART_ISR_Handler();
- *   }
- *
- * (If CubeMX already generated a body with HAL_UART_IRQHandler(&huart2) in
- * it because interrupt mode was enabled in the .ioc, replace that call with
- * Audio_UART_ISR_Handler() instead - we're using LL calls directly here,
- * not the HAL UART IRQ machinery.)
- *
- * Without this, USART2_IRQn will fire but jump to the default weak handler
- * (infinite loop / hard fault territory), or nothing will happen and the
- * ring buffer will simply never fill.
- * ===========================================================================
- */

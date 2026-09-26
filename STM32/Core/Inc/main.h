@@ -64,7 +64,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-void Audio_UART_ISR_Handler();
+void UART_ISR_Handler();
 
 /* USER CODE END EFP */
 
