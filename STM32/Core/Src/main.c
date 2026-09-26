@@ -42,6 +42,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/_intsup.h>
@@ -69,9 +70,13 @@ I2S_HandleTypeDef hi2s3;
 
 /* USER CODE BEGIN PV */
 #define Ring_Buffer_Size   16384u
-static volatile uint8_t  ringBuffer[Ring_Buffer_Size];
-static volatile uint16_t ringBufferPointer_RX = 0;
-static volatile uint16_t ringBufferPointer_TX = 0;
+static volatile uint8_t  ringBufferRX[Ring_Buffer_Size];
+static volatile uint16_t ringBufferRXPointer_RX = 0;
+static volatile uint16_t ringBufferRXPointer_TX = 0;
+
+static volatile uint8_t  ringBufferTX[Ring_Buffer_Size];
+static volatile uint16_t ringBufferTXPointer_RX = 0;
+static volatile uint16_t ringBufferTXPointer_TX = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,9 +102,9 @@ void UART_ISR_Handler(void)
   if (LL_USART_IsActiveFlag_RXNE(USART1))
   {
     uint8_t data = LL_USART_ReceiveData8(USART1);
-    ringBuffer[ringBufferPointer_RX] = data;
-    ringBufferPointer_RX++;
-    ringBufferPointer_RX &= 0x3FFF;
+    ringBufferRX[ringBufferRXPointer_RX] = data;
+    ringBufferRXPointer_RX++;
+    ringBufferRXPointer_RX &= 0x3FFF;
   }
 
   if (LL_USART_IsActiveFlag_ORE(USART1))
@@ -121,6 +126,22 @@ void USART_SEND_CHAR (char *data)
 void USART_SEND_BYTE (uint8_t data)
 {
   LL_USART_TransmitData8(USART2,data);
+}
+
+uint8_t btnState = 0;
+bool CHECK_BUTTON_PRESS(GPIO_TypeDef *GPIOx, uint32_t PinMask, uint8_t btnIndex)
+{
+  uint8_t mask = 0x1 << btnIndex;
+  bool pressed = (LL_GPIO_IsInputPinSet(GPIOx, PinMask) == 0);
+
+  bool result = pressed && !(btnState & mask);
+
+  if (pressed)
+    btnState |= mask;
+  else
+    btnState &= ~mask;
+    
+  return result;
 }
 
 /* USER CODE END 0 */
@@ -172,17 +193,27 @@ int main(void)
 
   // Debug_SendString("Debug UART OK - Amp streaming test ready\r\n");
   /* USER CODE END 2 */
-  ringBufferPointer_TX = 0;
+  ringBufferRXPointer_TX = 0;
   USART_SEND_CHAR("Hello from STM32 LL UART!\r\n");
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (true)
   {
     /* USER CODE END WHILE */
-    if (ringBufferPointer_TX != ringBufferPointer_RX) {
-      USART_SEND_BYTE(ringBuffer[ringBufferPointer_TX]);
-      ringBufferPointer_TX++;
-      ringBufferPointer_TX &= 0x3FFF;
+    if (ringBufferRXPointer_TX != ringBufferRXPointer_RX) {
+      USART_SEND_BYTE(ringBufferRX[ringBufferRXPointer_TX]);
+      ringBufferRXPointer_TX++;
+      ringBufferRXPointer_TX &= 0x3FFF;
+    }
+
+    if (CHECK_BUTTON_PRESS(GPIOB, LL_GPIO_PIN_4, 0)) {
+      USART_SEND_CHAR("YELLOW");
+    }
+    if (CHECK_BUTTON_PRESS(GPIOB, LL_GPIO_PIN_5,1)) {
+      USART_SEND_CHAR("BLUE");
+    }
+    if (CHECK_BUTTON_PRESS(GPIOC, LL_GPIO_PIN_4, 2)) {
+      USART_SEND_CHAR("RED");
     }
     /* USER CODE BEGIN 3 */
   }
