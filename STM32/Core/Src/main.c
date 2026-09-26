@@ -77,6 +77,8 @@ static volatile uint16_t ringBufferRXPointer_TX = 0;
 static volatile uint8_t  ringBufferTX[Ring_Buffer_Size];
 static volatile uint16_t ringBufferTXPointer_RX = 0;
 static volatile uint16_t ringBufferTXPointer_TX = 0;
+
+volatile uint32_t system_ms = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -91,12 +93,24 @@ static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 void UART_ISR_Handler(void);
+void SYSTICK_IRQ_Handler(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+//=================================== Time IRQ ========================================
+void SYSTICK_IRQ_Handler(void) {
+  system_ms++;
+}
+uint32_t millis(void)
+{
+  return system_ms;
+}
+//===================================================================================
+
+//=================================== USART IRQ ========================================
 void UART_ISR_Handler(void)
 {
   if (LL_USART_IsActiveFlag_RXNE(USART1))
@@ -112,27 +126,38 @@ void UART_ISR_Handler(void)
     LL_USART_ClearFlag_ORE(USART1);
   }
 }
+//===================================================================================
 
-void USART_SEND_CHAR (char *data)
+//=================================== Debug ========================================
+void USART_SEND_CHAR (USART_TypeDef *USARTx, char *data)
 {
   while (*data)
   {
-      while (!LL_USART_IsActiveFlag_TXE(USART2));   // Wait until TX buffer is empty
-      LL_USART_TransmitData8(USART2, *data++);      // Transmit next byte
+      while (!LL_USART_IsActiveFlag_TXE(USARTx));   // Wait until TX buffer is empty
+      LL_USART_TransmitData8(USARTx, *data++);      // Transmit next byte
   }
 
-  while (!LL_USART_IsActiveFlag_TC(USART2));        // Wait for final transmission to complete
+  while (!LL_USART_IsActiveFlag_TC(USARTx));        // Wait for final transmission to complete
 }
-void USART_SEND_BYTE (uint8_t data)
+void USART_SEND_BYTE (USART_TypeDef *USARTx, uint8_t data)
 {
-  LL_USART_TransmitData8(USART2,data);
+  LL_USART_TransmitData8(USARTx,data);
 }
+//===================================================================================
 
+//================================== Buttons ========================================
 uint8_t btnState = 0;
+uint32_t btnDebounce[3] = {0, 0, 0};
 bool CHECK_BUTTON_PRESS(GPIO_TypeDef *GPIOx, uint32_t PinMask, uint8_t btnIndex)
 {
+  if ((millis() - btnDebounce[btnIndex]) < 20)
+    return false;
+
   uint8_t mask = 0x1 << btnIndex;
   bool pressed = (LL_GPIO_IsInputPinSet(GPIOx, PinMask) == 0);
+
+  if (pressed != ((btnState & mask) != 0))
+    btnDebounce[btnIndex] = millis();
 
   bool result = pressed && !(btnState & mask);
 
@@ -140,9 +165,10 @@ bool CHECK_BUTTON_PRESS(GPIO_TypeDef *GPIOx, uint32_t PinMask, uint8_t btnIndex)
     btnState |= mask;
   else
     btnState &= ~mask;
-    
+
   return result;
 }
+//===================================================================================
 
 /* USER CODE END 0 */
 
@@ -194,26 +220,26 @@ int main(void)
   // Debug_SendString("Debug UART OK - Amp streaming test ready\r\n");
   /* USER CODE END 2 */
   ringBufferRXPointer_TX = 0;
-  USART_SEND_CHAR("Hello from STM32 LL UART!\r\n");
+  USART_SEND_CHAR(USART2, "Hello from STM32 LL UART!\r\n");
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (true)
   {
     /* USER CODE END WHILE */
     if (ringBufferRXPointer_TX != ringBufferRXPointer_RX) {
-      USART_SEND_BYTE(ringBufferRX[ringBufferRXPointer_TX]);
+      USART_SEND_BYTE(USART2,ringBufferRX[ringBufferRXPointer_TX]);
       ringBufferRXPointer_TX++;
       ringBufferRXPointer_TX &= 0x3FFF;
     }
 
     if (CHECK_BUTTON_PRESS(GPIOB, LL_GPIO_PIN_4, 0)) {
-      USART_SEND_CHAR("YELLOW");
+      USART_SEND_CHAR(USART1, "YELLOW\n");
     }
     if (CHECK_BUTTON_PRESS(GPIOB, LL_GPIO_PIN_5,1)) {
-      USART_SEND_CHAR("BLUE");
+      USART_SEND_CHAR(USART1, "BLUE\n");
     }
     if (CHECK_BUTTON_PRESS(GPIOC, LL_GPIO_PIN_4, 2)) {
-      USART_SEND_CHAR("RED");
+      USART_SEND_CHAR(USART1, "RED\n");
     }
     /* USER CODE BEGIN 3 */
   }

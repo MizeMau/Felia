@@ -31,7 +31,7 @@ namespace Felia
             _Listener.Stop();
         }
 
-        private void ClientListener()
+        private async void ClientListener()
         {
             ConnectedClients++;
             WaitForClient = true;
@@ -49,28 +49,27 @@ namespace Felia
             if (ConnectedClients < Config.MaxConnectionCount)
                 new Task(ClientListener).Start();
 
-            HandleClient(client);
+            await HandleClient(client);
             ConnectedClients--;
 
             if (!WaitForClient && ConnectedClients < Config.MaxConnectionCount)
                 new Task(ClientListener).Start();
         }
 
-        private void HandleClient(TcpClient client)
+        private async Task HandleClient(TcpClient client)
         {
             using NetworkStream stream = client.GetStream();
 
             try
             {
-                while (client.Connected)
-                {
-                    if (!string.IsNullOrEmpty(DataToSend))
-                    {
-                        byte[] data = Encoding.ASCII.GetBytes(DataToSend);
-                        client.Client.Send(data);
-                        DataToSend = null;
-                    }
-                }
+                using var cts = new CancellationTokenSource();
+
+                Task receiveTask = ReceiveLoop(stream, cts.Token);
+                Task sendTask = SendLoop(stream, cts.Token);
+
+                await Task.WhenAny(receiveTask, sendTask);
+
+                cts.Cancel();
             }
             catch
             {
@@ -79,6 +78,44 @@ namespace Felia
             finally
             {
                 client.Dispose();
+            }
+        }
+        async Task ReceiveLoop(NetworkStream stream, CancellationToken token)
+        {
+            byte[] buffer = new byte[4096];
+
+            while (!token.IsCancellationRequested)
+            {
+                int count = await stream.ReadAsync(buffer, token);
+
+                if (count == 0)
+                {
+                    break;
+                }
+
+                string test = Encoding.ASCII.GetString(buffer);
+                Console.Write(test);
+                //for (int i = 0; i < count; i++)
+                //{
+                //    string test = Encoding.ASCII.GetString(buffer);
+                //    Console.WriteLine(test);
+                //}
+            }
+        }
+        async Task SendLoop(NetworkStream stream, CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                if (!string.IsNullOrEmpty(DataToSend))
+                {
+                    byte[] data = Encoding.ASCII.GetBytes(DataToSend);
+
+                    await stream.WriteAsync(data, token);
+
+                    DataToSend = null;
+                }
+
+                await Task.Delay(1, token);
             }
         }
     }

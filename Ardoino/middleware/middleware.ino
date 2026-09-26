@@ -49,11 +49,6 @@ void connectServer() {
   }
 }
 
-bool sendPacket(const uint8_t* data, uint32_t len) {
-  if (len > 0 && client.write(data, len) != len) return false;
-  return true;
-}
-
 void setup() {
   Serial.begin(115200);
   Serial0.begin(921600);
@@ -79,36 +74,11 @@ void loop() {
       continue;
     Serial0.write(byte);
   }
+
+  while (Serial0.available()) {
+    int byte = Serial0.read();
+    if (byte == -1)
+      continue;
+    client.write((uint8_t)byte);
+  }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

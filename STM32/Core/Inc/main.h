@@ -65,6 +65,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 void UART_ISR_Handler();
+void SYSTICK_IRQ_Handler(void);
 
 /* USER CODE END EFP */
 
