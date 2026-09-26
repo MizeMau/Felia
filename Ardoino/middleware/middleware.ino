@@ -68,17 +68,21 @@ void loop() {
     connectServer();
   }
   
+  uint8_t buffer[1024];
+
   while (client.available()) {
-    int byte = client.read();
-    if (byte == -1)
-      continue;
-    Serial0.write(byte);
+      int count = client.read(buffer, sizeof(buffer));
+
+      if (count > 0) {
+          Serial0.write(buffer, count);
+      }
   }
 
   while (Serial0.available()) {
-    int byte = Serial0.read();
-    if (byte == -1)
-      continue;
-    client.write((uint8_t)byte);
+      int count = Serial0.read(buffer, sizeof(buffer));
+
+      if (count > 0) {
+          client.write(buffer, count);
+      }
   }
 }

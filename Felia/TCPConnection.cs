@@ -93,7 +93,7 @@ namespace Felia
                     break;
                 }
 
-                string test = Encoding.ASCII.GetString(buffer);
+                string test = Encoding.ASCII.GetString(buffer, 0, count);
                 Console.Write(test);
                 //for (int i = 0; i < count; i++)
                 //{
